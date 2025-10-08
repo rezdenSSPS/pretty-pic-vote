@@ -14,13 +14,90 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      voters: {
+        Row: {
+          created_at: string | null
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          name: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
+      votes: {
+        Row: {
+          id: string
+          image_id: string
+          voted_at: string | null
+          voter_id: string
+        }
+        Insert: {
+          id?: string
+          image_id: string
+          voted_at?: string | null
+          voter_id: string
+        }
+        Update: {
+          id?: string
+          image_id?: string
+          voted_at?: string | null
+          voter_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "votes_image_id_fkey"
+            columns: ["image_id"]
+            isOneToOne: false
+            referencedRelation: "voting_images"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "votes_voter_id_fkey"
+            columns: ["voter_id"]
+            isOneToOne: false
+            referencedRelation: "voters"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      voting_images: {
+        Row: {
+          id: string
+          image_url: string
+          uploaded_at: string | null
+          vote_count: number | null
+        }
+        Insert: {
+          id?: string
+          image_url: string
+          uploaded_at?: string | null
+          vote_count?: number | null
+        }
+        Update: {
+          id?: string
+          image_url?: string
+          uploaded_at?: string | null
+          vote_count?: number | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      increment_vote_count: {
+        Args: { image_uuid: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
