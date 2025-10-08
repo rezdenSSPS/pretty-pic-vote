@@ -98,19 +98,9 @@ const Index = () => {
       return;
     }
 
-    const { error: voteError } = await supabase
+    await supabase
       .from("votes")
       .insert({ voter_id: voterId, image_id: imageId });
-
-    if (voteError) {
-      if (voteError.code === "23505") {
-        toast.error("You already voted for this image!");
-      } else {
-        toast.error("Failed to record vote");
-        console.error(voteError);
-      }
-      return;
-    }
 
     const { error: incrementError } = await supabase.rpc("increment_vote_count", {
       image_uuid: imageId,
