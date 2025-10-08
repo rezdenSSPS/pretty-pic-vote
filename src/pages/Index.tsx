@@ -1,54 +1,187 @@
 import { useState, useEffect } from "react";
 import { VotingCard } from "@/components/VotingCard";
 import { UploadDialog } from "@/components/UploadDialog";
+import { NameDialog } from "@/components/NameDialog";
 import { Button } from "@/components/ui/button";
 import { RotateCcw, Sparkles } from "lucide-react";
 import { toast } from "sonner";
-import photo1 from "@/assets/photo1.jpg";
-import photo2 from "@/assets/photo2.jpg";
+import { supabase } from "@/integrations/supabase/client";
 import floralBg from "@/assets/floral-background.jpg";
 
-const STORAGE_KEY = "voting-data";
-
-interface VotingData {
-  votes1: number;
-  votes2: number;
-  image1?: string;
-  image2?: string;
+interface VotingImage {
+  id: string;
+  image_url: string;
+  vote_count: number;
+  uploaded_at: string;
 }
 
 const Index = () => {
-  const [votingData, setVotingData] = useState<VotingData>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : { votes1: 0, votes2: 0 };
-  });
+  const [images, setImages] = useState<VotingImage[]>([]);
+  const [voterId, setVoterId] = useState<string | null>(null);
+  const [voterName, setVoterName] = useState<string>("");
+  const [showNameDialog, setShowNameDialog] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(votingData));
-  }, [votingData]);
+    const savedVoterId = localStorage.getItem("voter_id");
+    const savedVoterName = localStorage.getItem("voter_name");
+    
+    if (savedVoterId && savedVoterName) {
+      setVoterId(savedVoterId);
+      setVoterName(savedVoterName);
+    } else {
+      setShowNameDialog(true);
+    }
 
-  const handleVote1 = () => {
-    setVotingData((prev) => ({ ...prev, votes1: prev.votes1 + 1 }));
-    toast.success("Vote counted!", { duration: 1500 });
-  };
+    fetchImages();
+    subscribeToImages();
+  }, []);
 
-  const handleVote2 = () => {
-    setVotingData((prev) => ({ ...prev, votes2: prev.votes2 + 1 }));
-    toast.success("Vote counted!", { duration: 1500 });
-  };
+  const fetchImages = async () => {
+    const { data, error } = await supabase
+      .from("voting_images")
+      .select("*")
+      .order("vote_count", { ascending: false });
 
-  const handleReset = () => {
-    if (window.confirm("Are you sure you want to reset all votes?")) {
-      setVotingData({ votes1: 0, votes2: 0, image1: votingData.image1, image2: votingData.image2 });
-      toast.success("Votes reset!");
+    if (error) {
+      toast.error("Failed to load images");
+      console.error(error);
+    } else {
+      setImages(data || []);
     }
   };
 
-  const handleUpload = (images: { image1: string; image2: string }) => {
-    setVotingData({ votes1: 0, votes2: 0, image1: images.image1, image2: images.image2 });
+  const subscribeToImages = () => {
+    const channel = supabase
+      .channel("voting-images-changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "voting_images",
+        },
+        () => {
+          fetchImages();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   };
 
-  const totalVotes = votingData.votes1 + votingData.votes2;
+  const handleNameSubmit = async (name: string) => {
+    const { data, error } = await supabase
+      .from("voters")
+      .insert({ name })
+      .select()
+      .single();
+
+    if (error) {
+      toast.error("Failed to save name");
+      console.error(error);
+    } else {
+      setVoterId(data.id);
+      setVoterName(name);
+      localStorage.setItem("voter_id", data.id);
+      localStorage.setItem("voter_name", name);
+      setShowNameDialog(false);
+      toast.success(`Welcome, ${name}!`);
+    }
+  };
+
+  const handleVote = async (imageId: string) => {
+    if (!voterId) {
+      toast.error("Please enter your name first");
+      setShowNameDialog(true);
+      return;
+    }
+
+    const { error: voteError } = await supabase
+      .from("votes")
+      .insert({ voter_id: voterId, image_id: imageId });
+
+    if (voteError) {
+      if (voteError.code === "23505") {
+        toast.error("You already voted for this image!");
+      } else {
+        toast.error("Failed to record vote");
+        console.error(voteError);
+      }
+      return;
+    }
+
+    const { error: incrementError } = await supabase.rpc("increment_vote_count", {
+      image_uuid: imageId,
+    });
+
+    if (incrementError) {
+      console.error(incrementError);
+    } else {
+      toast.success("Vote counted!", { duration: 1500 });
+    }
+  };
+
+  const handleReset = async () => {
+    const password = window.prompt("Enter password to reset:");
+    if (password !== "Denis") {
+      toast.error("Incorrect password!");
+      return;
+    }
+
+    const { error: votesError } = await supabase.from("votes").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    const { error: imagesError } = await supabase
+      .from("voting_images")
+      .update({ vote_count: 0 })
+      .neq("id", "00000000-0000-0000-0000-000000000000");
+
+    if (votesError || imagesError) {
+      toast.error("Failed to reset");
+      console.error(votesError || imagesError);
+    } else {
+      toast.success("All votes reset!");
+    }
+  };
+
+  const handleUpload = async (file: File) => {
+    if (!voterId) {
+      toast.error("Please enter your name first");
+      setShowNameDialog(true);
+      return;
+    }
+
+    const fileExt = file.name.split(".").pop();
+    const fileName = `${Date.now()}.${fileExt}`;
+    const filePath = fileName;
+
+    const { error: uploadError } = await supabase.storage
+      .from("voting-images")
+      .upload(filePath, file);
+
+    if (uploadError) {
+      toast.error("Failed to upload image");
+      console.error(uploadError);
+      return;
+    }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from("voting-images")
+      .getPublicUrl(filePath);
+
+    const { error: insertError } = await supabase
+      .from("voting_images")
+      .insert({ image_url: publicUrl });
+
+    if (insertError) {
+      toast.error("Failed to add image");
+      console.error(insertError);
+    } else {
+      toast.success("Image added to voting!");
+    }
+  };
+
+  const totalVotes = images.reduce((sum, img) => sum + img.vote_count, 0);
 
   return (
     <div 
@@ -81,20 +214,23 @@ const Index = () => {
           )}
         </header>
 
-        <div className="grid md:grid-cols-2 gap-6 md:gap-8 max-w-5xl mx-auto mb-8">
-          <VotingCard
-            image={votingData.image1 || photo1}
-            votes={votingData.votes1}
-            onVote={handleVote1}
-            isWinning={votingData.votes1 > votingData.votes2}
-          />
-          <VotingCard
-            image={votingData.image2 || photo2}
-            votes={votingData.votes2}
-            onVote={handleVote2}
-            isWinning={votingData.votes2 > votingData.votes1}
-          />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 max-w-7xl mx-auto mb-8">
+          {images.map((image) => (
+            <VotingCard
+              key={image.id}
+              image={image.image_url}
+              votes={image.vote_count}
+              onVote={() => handleVote(image.id)}
+              isWinning={image.vote_count === Math.max(...images.map(img => img.vote_count)) && image.vote_count > 0}
+            />
+          ))}
         </div>
+
+        {images.length === 0 && (
+          <div className="text-center text-muted-foreground mb-8">
+            <p className="text-lg">No images yet. Upload the first one!</p>
+          </div>
+        )}
 
         <div className="flex flex-wrap justify-center gap-4">
           <UploadDialog onUpload={handleUpload} />
@@ -103,6 +239,11 @@ const Index = () => {
             Reset Votes
           </Button>
         </div>
+
+        <NameDialog
+          open={showNameDialog}
+          onSubmit={handleNameSubmit}
+        />
       </div>
     </div>
   );
